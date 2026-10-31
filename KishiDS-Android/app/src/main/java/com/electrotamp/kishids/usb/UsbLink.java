@@ -262,9 +262,10 @@ public final class UsbLink {
             changed();
         }
         boolean allowed = mgr.hasPermission(d);
-        if (wantV2ProAccess && !allowed && !asked.contains(d.getDeviceName())) askPermission(d);
-        boolean denied = !allowed && asked.contains(d.getDeviceName());
-        if (denied != accessDenied) { accessDenied = denied; changed(); }
+        // Ask once per request.  A pending prompt is not a refusal: only the permission broadcast sets accessDenied, otherwise the
+        // diagnostics waiting for the answer would give up while the dialog is still on screen.
+        if (wantV2ProAccess && !allowed && !asked.contains(d.getDeviceName())) { askPermission(d); wantV2ProAccess = false; }
+        if (allowed && accessDenied) { accessDenied = false; changed(); }
         if (serial == null && allowed) {
             try { serial = d.getSerialNumber(); changed(); } catch (SecurityException ignored) { }
         }

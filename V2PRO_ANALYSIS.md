@@ -174,3 +174,27 @@
 4. 읽은 뒤 USB reset으로 컨트롤러가 다시 입력 장치로 돌아오는가. 실패하면 다시 꽂아야 한다
 5. 보고서의 Report 1 길이가 프로토타입 가설(13바이트)과 맞는지. 길이가 맞아도 필드 배치는 별도로 확인해야 한다
 6. V1이 있다면 V1 기능에 회귀가 없는가
+
+## 13. 실기 결과 1차 (2026-11-01, Legion Y700 Gen 2 + V2 Pro, 사용자 측정)
+
+**확인된 것 (실기)**
+- `1532:0717`, 제조사 `Razer`, 제품명 `Razer Kishi V2 Pro`로 인식되며 "Kishi V2 Pro found"가 기록되었다.
+- 인터페이스 5개가 모두 HID(class 03)이고, 기록해 둔 표와 일치한다.
+
+| # | subclass:protocol | 엔드포인트 |
+|---|---|---|
+| 0 | 01:00 (boot, none) | `0x81` IN interrupt, 16바이트, interval 1 |
+| 1 | 00:01 | `0x82` IN interrupt, 32바이트, interval 1 |
+| 2 | 01:01 (boot keyboard) | `0x83` IN interrupt, 16바이트, interval 1 |
+| 3 | 00:01 | `0x02` OUT interrupt, 16바이트, interval 1 |
+| 4 | 00:01 | `0x03` OUT interrupt, 64바이트, interval 1 |
+
+- 인터페이스 3과 4는 Android `UsbInterface`에 OUT 엔드포인트만 보고된다. HID 인터페이스에 IN 엔드포인트가 없는 구성이다. 원시 디스크립터로 다시 확인해야 한다.
+- 권한 대화상자가 표시되었고 허용되었다.
+
+**발견된 결함과 수정**
+- 허용한 뒤에도 디스크립터 읽기가 시작되지 않았다. 로그가 "USB access granted"에서 끝났다.
+- 원인: `UsbLink.followV2Pro()`가 권한 요청을 보내자마자, 사용자가 답하기도 전에 `accessDenied`를 true로 설정했다. `AppModel.diagnosticsTick()`이 이 값을 보고 대기 중인 요청을 취소했다.
+- 수정: 요청은 한 번만 보낸다. `accessDenied`는 거부 브로드캐스트에서만 설정하고, 권한이 있으면 해제한다.
+
+**아직 미확인**: bcdUSB, bcdDevice, 시리얼, Report Descriptor. 이 값들은 진단 실행 중에만 읽는다.
