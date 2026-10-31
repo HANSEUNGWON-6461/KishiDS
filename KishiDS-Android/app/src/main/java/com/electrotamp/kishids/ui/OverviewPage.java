@@ -15,7 +15,7 @@ import com.electrotamp.kishids.app.AppModel;
 public final class OverviewPage extends Page {
     private final Widgets.ControllerView controller;
     private final TextView title, detail, kvDevice, kvIds, kvMode, kvSerial;
-    private final Ui.Button apply, allow;
+    private final Ui.Button apply, allow, diagnostics;
     private final Tile tileButtons, tileRate, tileLed, tileName;
 
     /** A tappable summary tile: a coloured card with an eyebrow label, a value and a caption. */
@@ -53,6 +53,8 @@ public final class OverviewPage extends Page {
         info.addView(apply, Ui.lp(Ui.WRAP, Ui.WRAP, 0, 14, 0, 0));
         allow = Ui.primary(act, "Allow USB access", () -> m.allowAccess());
         info.addView(allow, Ui.lp(Ui.WRAP, Ui.WRAP, 0, 14, 0, 0));
+        diagnostics = Ui.primary(act, "USB diagnostics", () -> host.go(Host.DIAGNOSTICS));
+        info.addView(diagnostics, Ui.lp(Ui.WRAP, Ui.WRAP, 0, 14, 0, 0));
 
         info.addView(Ui.divider(act), Ui.lp(Ui.MATCH, Ui.dp(1), 0, 16, 0, 10));
         kvDevice = kv(info, "Device");
@@ -162,9 +164,11 @@ public final class OverviewPage extends Page {
         detail.setText(m.deviceDetail());
         Ui.show(apply, m.showApplyButton() && m.device != AppModel.Device.CUSTOM_LOCKED && m.canStart());
         Ui.show(allow, m.device == AppModel.Device.CUSTOM_LOCKED && m.accessDenied);
-        kvDevice.setText(m.s.product());
-        kvIds.setText(m.s.vidText() + " : " + m.s.pidText());
-        kvMode.setText(m.s.modeText());
+        Ui.show(diagnostics, m.isV2Pro());
+        boolean v2 = m.isV2Pro();   // the rows below otherwise describe the KishiDS settings, which mean nothing on this model
+        kvDevice.setText(v2 ? "Kishi V2 Pro" : m.s.product());
+        kvIds.setText(v2 ? "1532 : 0717" : m.s.vidText() + " : " + m.s.pidText());
+        kvMode.setText(v2 ? "Razer firmware" : m.s.modeText());
         kvSerial.setText(m.serial == null ? "—" : m.serial);
 
         tileButtons.value.setText(String.valueOf(m.s.remappedCount()));

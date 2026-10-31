@@ -15,6 +15,9 @@ import com.electrotamp.kishids.core.Settings;
 import com.electrotamp.kishids.core.StockFirmware;
 import com.electrotamp.kishids.core.Telemetry;
 import com.electrotamp.kishids.usb.UsbLink;
+import com.electrotamp.kishids.v2pro.KishiModel;
+import com.electrotamp.kishids.v2pro.UsbLayout;
+import com.electrotamp.kishids.v2pro.V2ProExpected;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -35,7 +38,7 @@ import java.util.concurrent.Executors;
  * and saved to the controller's flash after a quiet moment.  Main-thread only; USB work runs on worker threads and posts back.
  */
 public final class AppModel {
-    public enum Device { DISCONNECTED, BOOTLOADER, STOCK, CUSTOM_LOCKED, CUSTOM }
+    public enum Device { DISCONNECTED, BOOTLOADER, STOCK, CUSTOM_LOCKED, CUSTOM, V2_PRO }
 
     public enum Phase { IDLE, WAITING_FOR_BOOTLOADER, READY, FLASHING, VERIFYING, DONE, FAILED }
 
@@ -133,8 +136,11 @@ public final class AppModel {
     /** KishiDS firmware with live editing, talking to us. */
     public boolean isLive() { return device == Device.CUSTOM && tele != null && tele.live; }
 
+    public boolean isV2Pro() { return device == Device.V2_PRO; }
+
     public String deviceTitle() {
         switch (device) {
+            case V2_PRO: return "Kishi V2 Pro detected";
             case CUSTOM: return "Kishi connected";
             case CUSTOM_LOCKED: return "Kishi found";
             case STOCK: return "Kishi (stock firmware)";
@@ -145,6 +151,7 @@ public final class AppModel {
 
     public String deviceDetail() {
         switch (device) {
+            case V2_PRO: return "Recognised only. Settings and firmware aren't available for this model yet.";
             case CUSTOM:
                 if (isLive()) return "Live editing is on. Changes apply instantly.";
                 if (tele != null) return "Older KishiDS firmware. Apply once to switch on live editing.";
@@ -173,6 +180,7 @@ public final class AppModel {
                 if (isLive()) return tele.unsaved ? "Live · saving…" : "Live · saved on controller";
                 return inSync() ? "Controller is up to date" : "Changes not applied yet";
             case CUSTOM_LOCKED: return accessDenied ? "Allow USB access to connect" : "Waiting for USB access";
+            case V2_PRO: return "Diagnostics only";
             case DISCONNECTED: return "Settings saved on this phone";
             default: return dirty() ? "Changes not applied yet" : "Settings saved";
         }
@@ -192,7 +200,7 @@ public final class AppModel {
 
     public void barPrimary() { if (bar() == Bar.RESTART) restartController(); else beginApply(); }
 
-    public boolean showApplyButton() { return !isLive(); }
+    public boolean showApplyButton() { return !isLive() && !isV2Pro(); }
 
     // ---------------------------------------------------------------- per-frame update
 
@@ -212,6 +220,7 @@ public final class AppModel {
         }
         updateLiveLink();
         flowTick();
+        diagnosticsTick();
         calibration.update(tele, SystemClock.uptimeMillis());
     }
 
@@ -399,11 +408,22 @@ public final class AppModel {
 
     public void beginApply() {
         if (!canStart()) return;
+        if (isV2Pro()) { refuseV2Pro(); return; }
         if (needsOriginal() && confirmWithoutOriginal != null) { confirmWithoutOriginal.ask(() -> startFlow(false)); return; }
         startFlow(false);
     }
 
-    public void beginRestore() { if (canStart()) startFlow(true); }
+    public void beginRestore() {
+        if (!canStart()) return;
+        if (isV2Pro()) { refuseV2Pro(); return; }
+        startFlow(true);
+    }
+
+    /** Both of this app's firmware images are for the V1; a V2 Pro must never reach the flash flow. */
+    private void refuseV2Pro() {
+        if (onShowFirmware != null) onShowFirmware.run();
+        fail("Not available on the Kishi V2 Pro", "KishiDS firmware and Razer's V1 firmware are for the Kishi V1 only. Nothing was changed.");
+    }
 
     private void startFlow(boolean restore) {
         restoring = restore;
@@ -465,6 +485,7 @@ public final class AppModel {
 
     private void flowTick() {
         if (demo) return;
+        if (showSteps() && isV2Pro()) { refuseV2Pro(); return; }   // a flow started with nothing attached, then a V2 Pro was plugged in
         switch (phase) {
             case WAITING_FOR_BOOTLOADER:
                 if (device == Device.BOOTLOADER) enterReady();
@@ -548,6 +569,59 @@ public final class AppModel {
         phase = Phase.FAILED;
         link.setWantBootloader(false);
     }
+
+    // ---------------------------------------------------------------- V2 Pro diagnostics
+
+    public String diagnosticsReport = "";
+    public boolean diagnosticsRunning;
+    private boolean diagnosticsWanted;
+
+    /** Waiting for the user to answer Android's USB access prompt. */
+    public boolean diagnosticsWaiting() { return diagnosticsWanted; }
+
+    public boolean canRunDiagnostics() { return isV2Pro() && !diagnosticsRunning && !diagnosticsWanted; }
+
+    /** Read the V2 Pro's report descriptors, asking for USB access first if needed.  Interrupts its input for a moment. */
+    public void runDiagnostics() {
+        if (!canRunDiagnostics()) return;
+        diagnosticsWanted = true;
+        if (!link.v2ProAccessGranted()) link.requestV2ProAccess();
+    }
+
+    private void diagnosticsTick() {
+        if (!diagnosticsWanted) return;
+        if (!isV2Pro() || accessDenied) { diagnosticsWanted = false; return; }
+        if (!link.v2ProAccessGranted()) return;
+        diagnosticsWanted = false;
+        diagnosticsRunning = true;
+        io.execute(() -> {
+            String r = link.diagnoseV2Pro();
+            main.post(() -> { diagnosticsRunning = false; diagnosticsReport = r; });
+        });
+    }
+
+    /** Every attached USB device, as text.  Called about once a second while the diagnostics page is showing. */
+    public String attachedDevicesText() {
+        if (demo) return "Sample mode: USB is off.";
+        StringBuilder sb = new StringBuilder();
+        for (UsbLayout l : link.attachedDevices()) {
+            sb.append(l.text());
+            if (KishiModel.classify(l.vid, l.pid) == KishiModel.V2_PRO) {
+                List<String> diff = V2ProExpected.differences(l);
+                if (diff.isEmpty()) sb.append("Layout matches the recorded V2 Pro table.\n");
+                for (String d : diff) sb.append("Difference: ").append(d).append('\n');
+            }
+            sb.append('\n');
+        }
+        return sb.length() == 0 ? "No USB devices attached." : sb.toString().trim();
+    }
+
+    /** What Copy and Save hand over: the device list, the report, and the log that explains any failure. */
+    public String diagnosticsText() {
+        return "Attached USB devices\n\n" + attachedDevicesText() + "\n\n" + diagnosticsReport + "\n\nTechnical log\n\n" + link.logText();
+    }
+
+    public void saveDiagnostics(OutputStream out) throws IOException { out.write(diagnosticsText().getBytes(StandardCharsets.UTF_8)); }
 
     /** Developer aid for screenshots: show a given workflow state without flashing anything. */
     public void showDemoPhase(Phase p, double prog, String title, String detail) {

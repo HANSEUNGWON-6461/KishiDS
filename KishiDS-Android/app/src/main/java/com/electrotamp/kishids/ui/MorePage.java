@@ -11,7 +11,7 @@ import com.electrotamp.kishids.app.AppModel;
 
 /** The pages that do not fit the phone's bottom bar, as a list. */
 public final class MorePage extends Page {
-    private final TextView[] subtitles = new TextView[5];
+    private final TextView[] subtitles = new TextView[6];
 
     public MorePage(Activity act, AppModel m, Host host) {
         super(act, m, host, "More", "Everything else the controller can do.");
@@ -20,6 +20,7 @@ public final class MorePage extends Page {
         add(entry(2, Icons.PULSE, "Calibration", "Measure your sticks and triggers, report rate", Host.CALIBRATION), 10);
         add(entry(3, Icons.PERSON, "Identity", "The name your phone sees", Host.IDENTITY), 10);
         add(entry(4, Icons.DOWNLOAD, "Firmware", "Update the controller or restore Razer's firmware", Host.FIRMWARE), 10);
+        add(entry(5, Icons.SEARCH, "USB diagnostics", "Inspect attached USB devices and the Kishi V2 Pro", Host.DIAGNOSTICS), 10);
 
         LinearLayout about = card();
         about.addView(Ui.section(act, "KishiDS for Android"));

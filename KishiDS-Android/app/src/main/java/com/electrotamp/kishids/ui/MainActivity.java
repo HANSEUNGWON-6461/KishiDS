@@ -33,7 +33,7 @@ import java.util.Map;
  * "apply / restart" bar, and the first-run setup guide.  Everything is refreshed once per frame from the {@link AppModel}.
  */
 public final class MainActivity extends Activity implements Host {
-    private static final int REQ_IMPORT = 1, REQ_LOAD = 2, REQ_SAVE = 3;
+    private static final int REQ_IMPORT = 1, REQ_LOAD = 2, REQ_SAVE = 3, REQ_SAVE_DIAGNOSTICS = 4;
 
     private static AppModel model;
     private static String lastPage = Host.OVERVIEW;
@@ -150,7 +150,7 @@ public final class MainActivity extends Activity implements Host {
     // ---------------------------------------------------------------- layout
 
     private static boolean isSub(String id) {
-        return id.equals(Host.DPAD) || id.equals(Host.LIGHTING) || id.equals(Host.CALIBRATION) || id.equals(Host.IDENTITY) || id.equals(Host.FIRMWARE);
+        return id.equals(Host.DPAD) || id.equals(Host.LIGHTING) || id.equals(Host.CALIBRATION) || id.equals(Host.IDENTITY) || id.equals(Host.FIRMWARE) || id.equals(Host.DIAGNOSTICS);
     }
 
     private void buildUi() {
@@ -292,6 +292,7 @@ public final class MainActivity extends Activity implements Host {
         addRailItem(col, Host.CALIBRATION, Icons.PULSE);
         addRailItem(col, Host.IDENTITY, Icons.PERSON);
         addRailItem(col, Host.FIRMWARE, Icons.DOWNLOAD);
+        addRailItem(col, Host.DIAGNOSTICS, Icons.SEARCH);
 
         LinearLayout status = Ui.vbox(this);
         status.setBackground(Ui.box(Theme.card, 16, Theme.stroke, 1));
@@ -380,6 +381,7 @@ public final class MainActivity extends Activity implements Host {
             case Host.CALIBRATION: return new CalibrationPage(this, m, this);
             case Host.IDENTITY: return new IdentityPage(this, m, this);
             case Host.FIRMWARE: return new FirmwarePage(this, m, this);
+            case Host.DIAGNOSTICS: return new DiagnosticsPage(this, m, this);
             case Host.MORE: return new MorePage(this, m, this);
             default: return new OverviewPage(this, m, this);
         }
@@ -448,6 +450,8 @@ public final class MainActivity extends Activity implements Host {
 
     @Override public void saveProfile() { pick(Intent.ACTION_CREATE_DOCUMENT, REQ_SAVE, "application/json", "KishiDS-profile.json"); }
 
+    @Override public void saveDiagnostics() { pick(Intent.ACTION_CREATE_DOCUMENT, REQ_SAVE_DIAGNOSTICS, "text/plain", "KishiDS-USB-diagnostics.txt"); }
+
     @Override protected void onActivityResult(int req, int result, Intent data) {
         super.onActivityResult(req, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null) return;
@@ -456,6 +460,9 @@ public final class MainActivity extends Activity implements Host {
             if (req == REQ_SAVE) {
                 try (OutputStream out = getContentResolver().openOutputStream(uri)) { m.saveProfile(out); }
                 toast("Profile saved.");
+            } else if (req == REQ_SAVE_DIAGNOSTICS) {
+                try (OutputStream out = getContentResolver().openOutputStream(uri)) { m.saveDiagnostics(out); }
+                toast("Diagnostics saved.");
             } else if (req == REQ_LOAD) {
                 try (InputStream in = getContentResolver().openInputStream(uri)) {
                     String err = m.loadProfile(in);
@@ -512,6 +519,7 @@ public final class MainActivity extends Activity implements Host {
             case CUSTOM_LOCKED: return m.accessDenied ? "Allow access" : "Connecting…";
             case STOCK: return "Kishi · stock";
             case BOOTLOADER: return "Update mode";
+            case V2_PRO: return "Kishi V2 Pro";
             default: return "No controller";
         }
     }
@@ -520,7 +528,7 @@ public final class MainActivity extends Activity implements Host {
         switch (m.device) {
             case CUSTOM: return Theme.good;
             case CUSTOM_LOCKED: case BOOTLOADER: return Theme.warn;
-            case STOCK: return Theme.accent;
+            case STOCK: case V2_PRO: return Theme.accent;
             default: return Theme.textFaint;
         }
     }

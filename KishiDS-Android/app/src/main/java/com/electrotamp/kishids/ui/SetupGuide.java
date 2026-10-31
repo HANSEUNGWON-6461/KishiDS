@@ -246,6 +246,7 @@ public final class SetupGuide extends FrameLayout {
             case CUSTOM_LOCKED: return "Kishi found. Allow USB access when Android asks.";
             case STOCK: return "Kishi found, running Razer's original firmware.";
             case BOOTLOADER: return "Kishi found in update mode.";
+            case V2_PRO: return "Kishi V2 Pro found. This guide is for the Kishi V1, so nothing here applies to it yet.";
             default: return "No controller detected yet. You can plug it in whenever you like.";
         }
     }

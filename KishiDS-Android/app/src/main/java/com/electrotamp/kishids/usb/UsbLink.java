@@ -21,6 +21,8 @@ import com.electrotamp.kishids.core.DfuFlasher;
 import com.electrotamp.kishids.core.LiveInput;
 import com.electrotamp.kishids.core.LiveProtocol;
 import com.electrotamp.kishids.core.Telemetry;
+import com.electrotamp.kishids.v2pro.KishiModel;
+import com.electrotamp.kishids.v2pro.UsbLayout;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,7 +42,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link #onChange} is posted to the main thread whenever one of them changes.
  */
 public final class UsbLink {
-    public enum State { DISCONNECTED, BOOTLOADER, STOCK, CUSTOM_LOCKED, CUSTOM }
+    public enum State { DISCONNECTED, BOOTLOADER, STOCK, CUSTOM_LOCKED, CUSTOM, V2_PRO }
 
     public static final int VID_RAZER = 0x27F8, PID_STOCK = 0x0BBF, PID_BOOT = 0x0BC0;
     private static final String ACTION_PERMISSION = "com.electrotamp.kishids.USB_PERMISSION";
@@ -75,18 +77,20 @@ public final class UsbLink {
     public volatile boolean accessDenied;
     public Runnable onChange;
 
-    private volatile boolean running, active, busy, wantBootloader;
+    private volatile boolean running, active, busy, wantBootloader, wantV2ProAccess;
     private volatile int generation;
     private volatile boolean rescan;
     private Thread monitor;
     private volatile UsbDevice device;
     private volatile UsbDeviceConnection conn;
     private boolean receiverRegistered;
+    private final V2ProLink v2pro;
 
     public UsbLink(Context context) {
         ctx = context.getApplicationContext();
         mgr = (UsbManager) ctx.getSystemService(Context.USB_SERVICE);
         candidates.add(new int[] { 0x054C, 0x05C4 });
+        v2pro = new V2ProLink(mgr, this);
     }
 
     // ---------------------------------------------------------------- log
@@ -160,7 +164,7 @@ public final class UsbLink {
             if (ACTION_PERMISSION.equals(a)) {
                 boolean granted = i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
                 log("USB access " + (granted ? "granted" : "refused"));
-                if (!granted) { accessDenied = true; changed(); }
+                if (!granted) { accessDenied = true; wantV2ProAccess = false; changed(); }
             } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(a)) {
                 UsbDevice d = i.getParcelableExtra(UsbManager.EXTRA_DEVICE);
                 if (d != null) { asked.remove(d.getDeviceName()); foreign.remove(d.getDeviceName()); }
@@ -202,16 +206,19 @@ public final class UsbLink {
             return;
         }
         Map<String, UsbDevice> list = mgr.getDeviceList();
-        UsbDevice boot = null, custom = null, stock = null;
+        UsbDevice boot = null, custom = null, stock = null, v2 = null;
         for (UsbDevice d : list.values()) {
             if (d.getVendorId() == VID_RAZER && d.getProductId() == PID_BOOT) boot = d;
             else if (d.getVendorId() == VID_RAZER && d.getProductId() == PID_STOCK) stock = d;
+            else if (KishiModel.classify(d.getVendorId(), d.getProductId()) == KishiModel.V2_PRO) v2 = d;   // before the candidates: followCustom must never open one
             else if (isCandidate(d) && looksLikeKishiDs(d) && !foreign.contains(d.getDeviceName())) custom = d;
         }
 
         if (boot != null) { followPlain(boot, State.BOOTLOADER); return; }
         if (custom != null) { followCustom(custom); return; }
         if (stock != null) { followPlain(stock, State.STOCK); return; }
+        if (v2 != null) { followV2Pro(v2); return; }
+        wantV2ProAccess = false;
         if (device != null || state != State.DISCONNECTED) {
             teardown(false);
             device = null;
@@ -239,6 +246,26 @@ public final class UsbLink {
             if (denied != accessDenied) { accessDenied = denied; changed(); }
         }
         if (s == State.STOCK && serial == null && mgr.hasPermission(d)) {
+            try { serial = d.getSerialNumber(); changed(); } catch (SecurityException ignored) { }
+        }
+    }
+
+    /** Recognised, nothing more: no claim and no prompt, so the controller keeps working in games until diagnostics are asked for. */
+    private void followV2Pro(UsbDevice d) {
+        if (device == null || !device.getDeviceName().equals(d.getDeviceName()) || state != State.V2_PRO) {
+            teardown(false);
+            device = d;
+            accessDenied = false;
+            serial = null;
+            state = State.V2_PRO;
+            log("Kishi V2 Pro found: " + String.format("%04X:%04X", d.getVendorId(), d.getProductId()) + " with " + d.getInterfaceCount() + " interfaces");
+            changed();
+        }
+        boolean allowed = mgr.hasPermission(d);
+        if (wantV2ProAccess && !allowed && !asked.contains(d.getDeviceName())) askPermission(d);
+        boolean denied = !allowed && asked.contains(d.getDeviceName());
+        if (denied != accessDenied) { accessDenied = denied; changed(); }
+        if (serial == null && allowed) {
             try { serial = d.getSerialNumber(); changed(); } catch (SecurityException ignored) { }
         }
     }
@@ -318,7 +345,7 @@ public final class UsbLink {
     }
 
     /** UsbDeviceConnection.resetDevice() is not in the public SDK; call it by reflection and carry on if the platform refuses. */
-    private void resetQuietly(UsbDeviceConnection c) {
+    void resetQuietly(UsbDeviceConnection c) {
         try {
             Object r = UsbDeviceConnection.class.getMethod("resetDevice").invoke(c);
             log("USB reset: " + r);
@@ -493,6 +520,7 @@ public final class UsbLink {
             UsbDevice d = null;
             for (UsbDevice x : mgr.getDeviceList().values()) if (x.getVendorId() == VID_RAZER && x.getProductId() == PID_BOOT) d = x;
             if (d == null) return fail("The Kishi bootloader isn't connected. Hold Y + B + Right Function while plugging it in.");
+            if (!KishiModel.v1FlashAllowed(attachedIds())) return fail("A Kishi V2 Pro is connected. V1 firmware can't be written while one is attached.");
             if (!mgr.hasPermission(d)) return fail("KishiDS doesn't have permission to use the bootloader yet. Allow it in the prompt, then try again.");
             c = mgr.openDevice(d);
             if (c == null) return fail("Android wouldn't let the app open the bootloader.");
@@ -517,5 +545,50 @@ public final class UsbLink {
 
     private static DfuFlasher.Result fail(String why) {
         return new DfuFlasher.Result(false, why);
+    }
+
+    private int[][] attachedIds() {
+        List<int[]> ids = new ArrayList<>();
+        for (UsbDevice x : mgr.getDeviceList().values()) ids.add(new int[] { x.getVendorId(), x.getProductId() });
+        return ids.toArray(new int[0][]);
+    }
+
+    // ---------------------------------------------------------------- V2 Pro diagnostics (read-only)
+
+    /** Every USB device attached right now, whatever it is.  Needs no permission. */
+    public List<UsbLayout> attachedDevices() { return v2pro.attached(); }
+
+    public boolean v2ProAccessGranted() {
+        UsbDevice d = device;
+        return state == State.V2_PRO && d != null && mgr.hasPermission(d);
+    }
+
+    /** Ask for access to the V2 Pro (the system shows its own dialog). */
+    public void requestV2ProAccess() {
+        UsbDevice d = device;
+        if (state != State.V2_PRO || d == null) return;
+        asked.remove(d.getDeviceName());
+        accessDenied = false;
+        wantV2ProAccess = true;
+        wake();
+    }
+
+    /** Collect the V2 Pro's report descriptors.  Interrupts its input while it runs.  Blocks; run it on a worker thread. */
+    public String diagnoseV2Pro() {
+        busy = true;
+        try {
+            UsbDevice d = device;
+            if (state != State.V2_PRO || d == null) return "The Kishi V2 Pro isn't connected.";
+            if (!mgr.hasPermission(d)) return "KishiDS doesn't have USB access yet.";
+            log("Reading V2 Pro report descriptors");
+            return v2pro.diagnose(d);
+        } catch (RuntimeException e) {
+            log("diagnostics: " + e);
+            return "The diagnostics stopped: " + e;
+        } finally {
+            wantV2ProAccess = false;
+            busy = false;
+            wake();
+        }
     }
 }

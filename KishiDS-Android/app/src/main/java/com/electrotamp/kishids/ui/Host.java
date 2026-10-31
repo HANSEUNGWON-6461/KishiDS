@@ -3,7 +3,7 @@ package com.electrotamp.kishids.ui;
 /** What the pages need from the activity: navigation, file pickers, the setup guide. */
 public interface Host {
     String OVERVIEW = "Overview", BUTTONS = "Buttons", STICKS = "Sticks", TRIGGERS = "Triggers", DPAD = "D-pad", LIGHTING = "Lighting",
-            CALIBRATION = "Calibration", IDENTITY = "Identity", FIRMWARE = "Firmware", MORE = "More";
+            CALIBRATION = "Calibration", IDENTITY = "Identity", FIRMWARE = "Firmware", DIAGNOSTICS = "USB diagnostics", MORE = "More";
 
     void go(String page);
 
@@ -13,6 +13,8 @@ public interface Host {
     void loadProfile();
 
     void saveProfile();
+
+    void saveDiagnostics();
 
     void showSetup(int step);
 

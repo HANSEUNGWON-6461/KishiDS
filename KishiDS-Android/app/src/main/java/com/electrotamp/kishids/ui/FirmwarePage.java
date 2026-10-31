@@ -150,12 +150,12 @@ public final class FirmwarePage extends Page {
 
     @Override protected void onUpdate() {
         AppModel.Phase ph = m.phase;
-        Ui.show(warning, !m.hasStock());
+        Ui.show(warning, !m.hasStock() && !m.isV2Pro());
         ring.set(m.progress, ph == AppModel.Phase.WAITING_FOR_BOOTLOADER || ph == AppModel.Phase.VERIFYING, ringState(ph));
         flowTitle.setText(m.flowTitle);
         flowDetail.setText(m.flowDetail.isEmpty() ? idleDetail() : m.flowDetail);
         Ui.show(stepsBox, m.showSteps() && m.device != AppModel.Device.BOOTLOADER);
-        Ui.show(apply, m.canStart());
+        Ui.show(apply, m.canStart() && !m.isV2Pro());
         Ui.show(flash, ph == AppModel.Phase.READY);
         Ui.show(allow, ph == AppModel.Phase.WAITING_FOR_BOOTLOADER && m.device == AppModel.Device.BOOTLOADER);
         Ui.show(cancel, m.showSteps());
@@ -166,7 +166,7 @@ public final class FirmwarePage extends Page {
         stockText.setText(m.stockStatus());
         Ui.show(find, !has);
         Ui.show(how, !has);
-        restore.setEnabled(has && m.canStart());
+        restore.setEnabled(has && m.canStart() && !m.isV2Pro());
 
         if (logOpen && SystemClock.uptimeMillis() - lastLog > 500) {
             lastLog = SystemClock.uptimeMillis();
@@ -174,7 +174,10 @@ public final class FirmwarePage extends Page {
         }
     }
 
-    private String idleDetail() { return m.phase == AppModel.Phase.IDLE ? "Writes your settings and the KishiDS firmware to the controller." : ""; }
+    private String idleDetail() {
+        if (m.isV2Pro()) return "Firmware updates aren't available for the Kishi V2 Pro. This page only applies to the Kishi V1.";
+        return m.phase == AppModel.Phase.IDLE ? "Writes your settings and the KishiDS firmware to the controller." : "";
+    }
 
     private static int ringState(AppModel.Phase ph) {
         switch (ph) {
