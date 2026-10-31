@@ -21,6 +21,7 @@ import com.electrotamp.kishids.core.DfuFlasher;
 import com.electrotamp.kishids.core.LiveInput;
 import com.electrotamp.kishids.core.LiveProtocol;
 import com.electrotamp.kishids.core.Telemetry;
+import com.electrotamp.kishids.v2pro.InputCapture;
 import com.electrotamp.kishids.v2pro.KishiModel;
 import com.electrotamp.kishids.v2pro.UsbLayout;
 
@@ -586,6 +587,25 @@ public final class UsbLink {
         } catch (RuntimeException e) {
             log("diagnostics: " + e);
             return "The diagnostics stopped: " + e;
+        } finally {
+            wantV2ProAccess = false;
+            busy = false;
+            wake();
+        }
+    }
+
+    /** Run a guided input capture on the V2 Pro until {@code stop} is set or it finishes.  Blocks; run it on its own thread.  Read-only. */
+    public String captureV2Pro(InputCapture cap, java.util.concurrent.atomic.AtomicBoolean stop) {
+        busy = true;
+        try {
+            UsbDevice d = device;
+            if (state != State.V2_PRO || d == null) return "The Kishi V2 Pro isn't connected.";
+            if (!mgr.hasPermission(d)) return "KishiDS doesn't have USB access yet.";
+            log("Starting V2 Pro input capture");
+            return v2pro.capture(d, cap, stop);
+        } catch (RuntimeException e) {
+            log("capture: " + e);
+            return "The capture stopped: " + e;
         } finally {
             wantV2ProAccess = false;
             busy = false;

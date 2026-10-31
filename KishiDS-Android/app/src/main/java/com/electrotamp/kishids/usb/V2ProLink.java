@@ -1,12 +1,15 @@
 package com.electrotamp.kishids.usb;
 
+import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.os.SystemClock;
 
 import com.electrotamp.kishids.core.DfuFlasher;
+import com.electrotamp.kishids.v2pro.InputCapture;
 import com.electrotamp.kishids.v2pro.UsbLayout;
 import com.electrotamp.kishids.v2pro.V2ProProbe;
 
@@ -15,6 +18,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Android side of the V2 Pro diagnostics: turns UsbDevice objects into {@link UsbLayout}s and runs {@link V2ProProbe} over a real
@@ -92,6 +96,66 @@ final class V2ProLink {
         } finally {
             if (claimed[0]) link.resetQuietly(c);   // releasing leaves the interfaces without a driver; a reset rebinds them
             try { c.close(); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    /**
+     * Reads the input reports of every HID interface that has an interrupt IN endpoint and hands them to {@code cap}, until {@code stop}
+     * is set, the capture finishes or the controller is unplugged.  Only IN transfers are made: no control request and nothing on an OUT
+     * endpoint.  Claiming detaches Android's HID driver, so games see no input meanwhile; a USB reset at the end rebinds it.
+     * Returns null on success, otherwise why it could not start.
+     */
+    String capture(UsbDevice d, final InputCapture cap, final AtomicBoolean stop) {
+        final UsbDeviceConnection c = mgr.openDevice(d);
+        if (c == null) return "Android would not open the device.";
+        List<UsbInterface> claimed = new ArrayList<>();
+        List<Thread> readers = new ArrayList<>();
+        try {
+            for (int i = 0; i < d.getInterfaceCount(); i++) {
+                UsbInterface u = d.getInterface(i);
+                if (u.getAlternateSetting() != 0 || u.getInterfaceClass() != UsbConstants.USB_CLASS_HID) continue;
+                UsbEndpoint in = null;
+                for (int e = 0; e < u.getEndpointCount(); e++) {
+                    UsbEndpoint p = u.getEndpoint(e);
+                    if (p.getDirection() == UsbConstants.USB_DIR_IN && p.getType() == UsbConstants.USB_ENDPOINT_XFER_INT) in = p;
+                }
+                if (in == null) continue;                          // interfaces 3 and 4 only have OUT endpoints: left alone
+                boolean ok = c.claimInterface(u, true);
+                link.log("capture: claim interface " + u.getId() + ": " + ok);
+                if (!ok) continue;
+                claimed.add(u);
+                final int id = u.getId();
+                final UsbEndpoint ep = in;
+                Thread t = new Thread(() -> {
+                    byte[] buf = new byte[Math.max(64, ep.getMaxPacketSize())];
+                    while (!stop.get()) {
+                        int n = c.bulkTransfer(ep, buf, buf.length, 100);   // usbfs serves interrupt endpoints through the bulk call
+                        if (n > 0) cap.feed(id, buf, n, SystemClock.uptimeMillis());
+                    }
+                }, "v2pro-in-" + id);
+                t.setDaemon(true);
+                t.start();
+                readers.add(t);
+            }
+            if (claimed.isEmpty()) return "No input interface could be claimed.";
+            long lastCheck = 0;
+            while (!stop.get() && !cap.finished()) {
+                long now = SystemClock.uptimeMillis();
+                cap.tick(now);
+                if (now - lastCheck > 1000) {
+                    lastCheck = now;
+                    if (!mgr.getDeviceList().containsKey(d.getDeviceName())) { link.log("capture: controller unplugged"); break; }
+                }
+                try { Thread.sleep(50); } catch (InterruptedException e) { break; }
+            }
+            return null;
+        } finally {
+            stop.set(true);
+            for (Thread t : readers) { try { t.join(500); } catch (InterruptedException ignored) { } }
+            for (UsbInterface u : claimed) { try { c.releaseInterface(u); } catch (RuntimeException ignored) { } }
+            if (!claimed.isEmpty()) link.resetQuietly(c);   // releasing leaves the interfaces without a driver; a reset rebinds them
+            try { c.close(); } catch (RuntimeException ignored) { }
+            link.log("capture: ended after " + cap.reports() + " reports");
         }
     }
 

@@ -65,7 +65,11 @@ Razer's V1 firmware are for the Kishi V1 only, and the V2 Pro's bootloader, upda
   For a V2 Pro, the listing is compared with the recorded table (5 interfaces, IN `0x81 0x82 0x83`, OUT `0x02 0x03`). **Read report descriptors** asks
   for USB access, then reads the HID report descriptor of each HID interface and decodes it. Android's HID driver is detached while this runs, so input
   stops for a moment and the controller is reset afterwards. The result can be copied or saved as a text file.
-- **Read-only by construction.** Every diagnostic request goes through `v2pro/ReadOnlyPipe`, which passes only `GET_DESCRIPTOR` (HID report
+- **Input mapping** (same page). A guided capture asks for one control at a time (A, B, X, Y, D-pad, bumpers, triggers, sticks, small
+  buttons, optional M1/M2) and records which input report fields react. It claims the HID interfaces that have an IN endpoint (0, 1, 2) and
+  only reads them: no control request and no OUT transfer. Games get no input until it ends, and it stops by itself a few seconds after the
+  app leaves the screen. The result, including every distinct raw report, goes into Copy/Save.
+- **Read-only by construction.** Every diagnostic control request goes through `v2pro/ReadOnlyPipe`, which passes only `GET_DESCRIPTOR` (HID report
   descriptor) and refuses everything else, including `SET_REPORT` and any DFU request.
 - `test\run.ps1` now also compiles `v2pro\` and runs `test\V2ProSelfTest.java` (simulated V2 Pro, V1 regression checks) before `SelfTest`.
 

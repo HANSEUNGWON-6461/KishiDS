@@ -15,6 +15,7 @@ import com.electrotamp.kishids.core.Settings;
 import com.electrotamp.kishids.core.StockFirmware;
 import com.electrotamp.kishids.core.Telemetry;
 import com.electrotamp.kishids.usb.UsbLink;
+import com.electrotamp.kishids.v2pro.InputCapture;
 import com.electrotamp.kishids.v2pro.KishiModel;
 import com.electrotamp.kishids.v2pro.UsbLayout;
 import com.electrotamp.kishids.v2pro.V2ProExpected;
@@ -112,7 +113,10 @@ public final class AppModel {
 
     private final Runnable releaseTask = this::releaseIfIdle;
 
-    private void releaseIfIdle() { if (!busy()) link.setActive(false); }
+    private void releaseIfIdle() {
+        stopCapture();   // a capture holds the controller away from games: never leave it running in the background
+        if (!busy()) link.setActive(false);
+    }
 
     public void onForeground() {
         main.removeCallbacks(releaseTask);
@@ -221,6 +225,7 @@ public final class AppModel {
         updateLiveLink();
         flowTick();
         diagnosticsTick();
+        captureTick();
         calibration.update(tele, SystemClock.uptimeMillis());
     }
 
@@ -579,7 +584,7 @@ public final class AppModel {
     /** Waiting for the user to answer Android's USB access prompt. */
     public boolean diagnosticsWaiting() { return diagnosticsWanted; }
 
-    public boolean canRunDiagnostics() { return isV2Pro() && !diagnosticsRunning && !diagnosticsWanted; }
+    public boolean canRunDiagnostics() { return isV2Pro() && !diagnosticsRunning && !diagnosticsWanted && !captureRunning && !captureWanted; }
 
     /** Read the V2 Pro's report descriptors, asking for USB access first if needed.  Interrupts its input for a moment. */
     public void runDiagnostics() {
@@ -600,6 +605,53 @@ public final class AppModel {
         });
     }
 
+    // ---------------------------------------------------------------- V2 Pro input capture (read-only)
+
+    /** The running or last capture; null before the first. */
+    public InputCapture capture;
+    public boolean captureRunning;
+    public String captureError = "";
+    private boolean captureWanted;
+    private java.util.concurrent.atomic.AtomicBoolean captureStop;
+
+    public boolean captureWaiting() { return captureWanted; }
+
+    public boolean canRunCapture() { return isV2Pro() && !diagnosticsRunning && !diagnosticsWanted && !captureRunning && !captureWanted; }
+
+    /** Start the guided capture, asking for USB access first if needed.  Input to games stops until it ends. */
+    public void startCapture() {
+        if (!canRunCapture()) return;
+        captureWanted = true;
+        if (!link.v2ProAccessGranted()) link.requestV2ProAccess();
+    }
+
+    public void stopCapture() {
+        captureWanted = false;
+        if (captureStop != null) captureStop.set(true);
+    }
+
+    public void captureNext() { if (capture != null && captureRunning) capture.next(); }
+
+    private void captureTick() {
+        if (!captureWanted) return;
+        if (!isV2Pro() || accessDenied) { captureWanted = false; return; }
+        if (!link.v2ProAccessGranted()) return;
+        captureWanted = false;
+        captureRunning = true;
+        captureError = "";
+        final InputCapture cap = new InputCapture(1500);
+        final java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        capture = cap;
+        captureStop = stop;
+        Thread t = new Thread(() -> {
+            String err = link.captureV2Pro(cap, stop);
+            cap.finish();
+            main.post(() -> { captureRunning = false; captureError = err == null ? "" : err; });
+        }, "v2pro-capture");
+        t.setDaemon(true);
+        t.start();
+    }
+
     /** Every attached USB device, as text.  Called about once a second while the diagnostics page is showing. */
     public String attachedDevicesText() {
         if (demo) return "Sample mode: USB is off.";
@@ -618,7 +670,8 @@ public final class AppModel {
 
     /** What Copy and Save hand over: the device list, the report, and the log that explains any failure. */
     public String diagnosticsText() {
-        return "Attached USB devices\n\n" + attachedDevicesText() + "\n\n" + diagnosticsReport + "\n\nTechnical log\n\n" + link.logText();
+        String cap = capture == null ? "" : capture.report() + (captureError.isEmpty() ? "" : "Capture error: " + captureError + "\n") + "\n";
+        return "Attached USB devices\n\n" + attachedDevicesText() + "\n\n" + diagnosticsReport + "\n\n" + cap + "Technical log\n\n" + link.logText();
     }
 
     public void saveDiagnostics(OutputStream out) throws IOException { out.write(diagnosticsText().getBytes(StandardCharsets.UTF_8)); }
