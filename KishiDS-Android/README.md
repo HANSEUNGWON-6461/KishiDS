@@ -9,12 +9,13 @@ screens); **portrait** gets a bottom bar. Dark and light themes use the desktop 
 
 ## Build
 
-Needs JDK 17 and the Android SDK (platform `android-34`, build-tools 34). No Gradle, no Android Studio.
+Needs JDK 17 and the Android SDK (platform `android-34`, build-tools 34). No Gradle, no Android Studio. Use JDK 17 specifically: with JDK 21's
+`javac`, build-tools 34's `d8` stops with an internal error (`NullPointerException`) on an anonymous class in `AppModel`.
 
 ```powershell
 .\build.ps1            # -> dist\KishiDS.apk   (min Android 7.0)
 .\build.ps1 -Install   # also installs it with adb
-.\test\run.ps1         # JVM self-test of the core (no phone needed)
+.\test\run.ps1         # JVM self-tests of the core and the V2 Pro diagnostics (no phone needed)
 ```
 
 The first build creates a throw-away signing key in `keystore\` (git-ignored). Use `-Keystore`, `-KeyAlias`, `-KeyPass` for your own release key.
@@ -49,6 +50,28 @@ KishiDS does the same transfer (`core/DfuFlasher.java`), additionally polling `G
 does), checking every status, and treating the controller's reset after manifest as success. The same user steps apply, so the Firmware page walks
 through them. Razer's original image is not bundled: with Razer's Kishi app installed, **Find it for me** reads it straight from the installed package
 (verified by SHA-256); otherwise pick the `.apk` / `.bin` file.
+
+## Kishi V2 Pro: recognition and read-only diagnostics
+
+The app recognises a Razer Kishi V2 Pro (`1532:0717`) as its own model. It does **not** configure it and does **not** flash it: KishiDS firmware and
+Razer's V1 firmware are for the Kishi V1 only, and the V2 Pro's bootloader, update mode and firmware format are unknown. See
+[`V2PRO_ANALYSIS.md`](../V2PRO_ANALYSIS.md).
+
+- **Recognition only.** Plugging in a V2 Pro shows "Kishi V2 Pro detected". The app claims nothing and asks for no permission, so the controller keeps
+  working in games.
+- **Kept out of every V1 flash path.** Apply, Restore and the setup steps are refused while a V2 Pro is attached. This is checked in the UI, in
+  `AppModel` and again in `UsbLink.flash()` just before the bootloader is opened.
+- **USB diagnostics page** (More → USB diagnostics). It lists every attached USB device with its interfaces and endpoints, which needs no permission.
+  For a V2 Pro, the listing is compared with the recorded table (5 interfaces, IN `0x81 0x82 0x83`, OUT `0x02 0x03`). **Read report descriptors** asks
+  for USB access, then reads the HID report descriptor of each HID interface and decodes it. Android's HID driver is detached while this runs, so input
+  stops for a moment and the controller is reset afterwards. The result can be copied or saved as a text file.
+- **Read-only by construction.** Every diagnostic request goes through `v2pro/ReadOnlyPipe`, which passes only `GET_DESCRIPTOR` (HID report
+  descriptor) and refuses everything else, including `SET_REPORT` and any DFU request.
+- `test\run.ps1` now also compiles `v2pro\` and runs `test\V2ProSelfTest.java` (simulated V2 Pro, V1 regression checks) before `SelfTest`.
+
+**Not verified on hardware.** The V2 Pro code paths have been run only against simulated devices in the JVM tests. The APK builds, but nothing about
+the V2 Pro has been tried on a phone with a real controller: the identification, the interface layout, the permission prompt, the claim, the descriptor
+request and the hand-back after the reset.
 
 ## Not yet verified on a phone
 

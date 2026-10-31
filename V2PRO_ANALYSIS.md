@@ -131,3 +131,46 @@
 | 연결된 USB 장치 전체 목록을 표시한다 | Phase 3에서 업데이트 모드의 VID/PID를 찾는 데 그대로 쓴다 |
 
 디스크립터 요청에 인터페이스 claim이 필요한 이유: Linux usbfs는 인터페이스 대상 컨트롤 요청 전에 해당 인터페이스의 소유권을 확인한다. 이 내용은 Linux의 일반 동작이며, Legion Y700 Gen 2의 커널에서는 실기로 확인해야 한다.
+
+## 12. Phase 2 구현 결과
+
+브랜치 `v2pro-diagnostics`. 여기 적은 결과는 모두 **시뮬레이션 장치 기준**이다. 실기 V2 Pro로는 아무것도 확인하지 않았다.
+
+### 구현 내용
+
+| 파일 | 내용 |
+|---|---|
+| `v2pro/KishiModel.java` | VID/PID로 V1 순정, V1 부트로더, V2 Pro, 기타를 구분한다. `v1FlashAllowed()`는 V2 Pro가 연결되어 있으면 V1 플래싱을 거부한다 |
+| `v2pro/UsbLayout.java` | 인터페이스와 엔드포인트 모델. 원시 구성 디스크립터를 파싱하고, HID 디스크립터의 Report 길이와 DFU 인터페이스 유무를 읽는다 |
+| `v2pro/V2ProExpected.java` | 사용자가 제공한 V2 Pro 표(인터페이스 5개, 엔드포인트)와 실제 구성을 비교한다. 프로토타입 가설(Report 1, 13바이트) 상수를 둔다 |
+| `v2pro/HidDescriptor.java` | HID Report Descriptor를 파싱한다. Report ID별 입력, 출력, 기능 길이와 Usage를 계산한다 |
+| `v2pro/ReadOnlyPipe.java` | `GET_DESCRIPTOR`(Report, `0x81/0x06/0x2200`) 외 모든 컨트롤 요청을 거부한다 |
+| `v2pro/V2ProProbe.java` | HID 인터페이스마다 claim, 디스크립터 읽기, release를 수행한다. 실패해도 다음 인터페이스로 넘어가고, 텍스트 보고서를 만든다 |
+| `usb/V2ProLink.java` | Android `UsbDevice`를 `UsbLayout`으로 변환한다. 실제 연결로 Probe를 실행한 뒤 USB reset으로 드라이버를 재연결한다 |
+| `usb/UsbLink.java` | 분류 단계에서 V2 Pro를 후보 목록보다 먼저 판정한다. `State.V2_PRO`를 추가하고, 인식만 할 뿐 권한 요청이나 claim은 하지 않는다. `flash()` 직전에 V2 Pro가 연결되어 있으면 거부한다 |
+| `app/AppModel.java` | `Device.V2_PRO`를 추가했다. 적용, 복구, 진행 중인 흐름을 거부하고 진단 실행 상태를 관리한다 |
+| `ui/DiagnosticsPage.java` 외 UI | 진단 페이지(장치 목록, 디스크립터 읽기, 복사, 저장)를 추가했다. V2 Pro가 연결되면 Firmware 페이지의 적용 버튼을 숨기고 복구 버튼을 비활성화한다 |
+| `test/V2ProSelfTest.java`, `test/run.ps1` | V2 Pro 모의 장치 테스트와 V1 회귀 테스트를 추가하고 실행 순서에 넣었다 |
+
+### 빌드 결과 (2026-10-31, 클라우드 Linux)
+
+- Android SDK: platform `android-34`, build-tools `34.0.0`, JDK 17.0.20.
+- `build.ps1`과 같은 순서(aapt2 → javac `--release 8` → d8 → zipalign → apksigner)를 Linux에서 실행했다.
+- Android 의존 클래스(`UsbLink`, `V2ProLink`, `AppModel`, UI)는 이번에 처음 컴파일했고, 오류 없이 통과했다. 출력은 deprecated API 안내뿐이다.
+- APK: 246,952바이트, `apksigner verify` 통과, minSdk 24, targetSdk 34. 로컬 임시 키로 서명했다.
+- JDK 21의 `javac`로 빌드하면 build-tools 34의 `d8`이 V1 코드(`AppModel.startFlashing`의 익명 클래스)에서 내부 오류로 멈춘다. 코드 문제가 아니라 툴체인 조합 문제라서, README의 JDK 17 요구사항에 이 내용을 덧붙였다.
+
+### 테스트 결과 (JVM, 모의 장치)
+
+- `V2ProSelfTest`: 46개 PASS
+- `SelfTest`: 44개 PASS. `kishi_ds4.bin`만 사용했고, 순정 이미지가 없어 해당 선택 항목은 실행하지 않았다.
+- 합계 90개 PASS, 실패 0개. 이전 세션에서 보고한 88개와 수가 다른 원인은 확인하지 않았다.
+
+### 실기에서 확인해야 할 것 (Legion Y700 Gen 2 + V2 Pro)
+
+1. 연결하면 "Kishi V2 Pro detected"가 표시되고, 게임 입력이 끊기지 않는가
+2. 진단 페이지의 장치 목록이 V2 Pro 표(인터페이스 5개, 엔드포인트)와 일치하는가
+3. 권한 대화상자가 뜨고, 허용 후 각 HID 인터페이스의 Report Descriptor를 읽는가
+4. 읽은 뒤 USB reset으로 컨트롤러가 다시 입력 장치로 돌아오는가. 실패하면 다시 꽂아야 한다
+5. 보고서의 Report 1 길이가 프로토타입 가설(13바이트)과 맞는지. 길이가 맞아도 필드 배치는 별도로 확인해야 한다
+6. V1이 있다면 V1 기능에 회귀가 없는가
