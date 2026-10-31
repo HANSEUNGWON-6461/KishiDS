@@ -51,6 +51,49 @@ Report 3 (in a separate Consumer Control collection, also repeated on interface 
 (`0x224`), Menu (`0x40`), Volume Up (`0xE9`), Volume Down (`0xEA`), Power (`0x30`), Sleep (`0x32`), AL Select Task/Application (`0x1A2`), then 7
 constant bytes.
 
+## Physical controls -> report 1 (measured 2026-11-01, one unit, guided capture)
+
+Captured with the app's input mapping (read-only: IN transfers on interfaces 0-2 only). 238 reports, all checked against the raw bytes.
+
+| Control | Field | Raw evidence |
+|---|---|---|
+| A | button 1 (byte 5 bit 4) | `05 = 18` |
+| B | button 2 (byte 5 bit 5) | `05 = 28` |
+| X | button 4 (byte 5 bit 7) | `05 = 88` |
+| Y | button 5 (byte 6 bit 0) | `06 = 01` |
+| D-pad up / right / down / left | hat 0 / 2 / 4 / 6 | rest value is **8** |
+| LB / RB | button 7 / 8 (byte 6 bit 2 / 3) | `06 = 04 / 08` |
+| LT | button 9 (byte 6 bit 4) + Brake byte 9, 0-255 | digital bit is set from the first non-zero analogue value |
+| RT | button 10 (byte 6 bit 5) + Accelerator byte 10, 0-255 | same |
+| View / Menu | button 11 / 12 (byte 6 bit 6 / 7) | |
+| Razer (home) | button 13 (byte 7 bit 0) | |
+| L3 / R3 | button 14 / 15 (byte 7 bit 1 / 2) | |
+| Left stick | X = byte 1 (right = high), Y = byte 2 (up = **low**) | rest 0x80, full 0x00-0xFF |
+| Right stick | Z = byte 3 (right = high), Rz = byte 4 (up = **low**) | rest 0x80, full 0x00-0xFF |
+| Screenshot | interface 1 report 3: Volume Down, then + Power (`10`, `30`); interface 2 report 7 = `00 00 2B 01 00 00 00 00` while held | not on interface 0 |
+| M1 / M2 | indistinguishable from other buttons: the capture saw button 14 (L3) and button 1 (A) | probably remapped inside the controller; not verified |
+
+Buttons 3, 6, 16-18 never set. The order matches the Linux gamepad convention (A, B, C, X, Y, Z, TL, TR, TL2, TR2, SELECT, START, MODE, THUMBL, THUMBR).
+
+Other observations:
+- **Reports are only sent on change.** Nothing arrived during 1.5 s hands-off; the first report came with the first press.
+- During analogue movement, reports came about every 4 ms.
+- The vendor bytes 11-12 stayed `00 00` throughout. Touch (interface 1, report 1) never fired.
+
+### Compared with the KishiDS DS4 report (`ds4-firmware/report.c`)
+
+| DS4 byte | DS4 meaning | V2 Pro source |
+|---|---|---|
+| 1-4 | LX, LY, RX, RY, 0x80 centre, up = low | bytes 1-4 unchanged (same order and polarity) |
+| 5 low nibble | hat 0-7, 8 = neutral | byte 5 low nibble unchanged (same encoding) |
+| 5 high nibble | Square, Cross, Circle, Triangle | X, A, B, Y (buttons 4, 1, 2, 5) |
+| 6 | L1, R1, L2, R2, Share, Options, L3, R3 | buttons 7, 8, 9, 10, 11, 12, 14, 15 |
+| 7 bit 0 | PS | button 13 |
+| 8 / 9 | L2 / R2 analogue | bytes 9 / 10 |
+
+Translation is therefore a fixed byte/bit shuffle. This is an observation about report formats only. It says nothing about whether the
+V2 Pro's firmware can be replaced, or about what an iPhone accepts.
+
 ## Interface 1: touch screen digitizer
 
 Digitizer page, Touch Screen (`0x0D:0x04`). Input report 1, 40 bytes: five contacts, each Tip Switch (1 bit + 7 padding), Contact ID (8),
