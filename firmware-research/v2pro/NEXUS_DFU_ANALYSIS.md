@@ -114,3 +114,25 @@ The app does **not** issue raw `controlTransfer` for DFU. It hands the firmware 
 ### What is still needed to build a working flasher
 - The **exact USB wrapping**: which interface/endpoint, SET_REPORT vs interrupt-OUT, report ID, and chunk/packet size. These live in the stripped native SDK. The reliable + safe way to capture them is a **USB bus capture of a real Nexus firmware operation** (even just GetDeviceInformation/GetVerify), not further static disassembly.
 - The MCU part number (for writing any custom image) — still unidentified; needs a physical teardown. `libRazer_IoT_SDK.so` did not name the Kishi MCU.
+
+## Decisive finding (2026-11-01): iOS support is MFi, and the V2 Pro firmware has none
+
+Compared the stock firmware images of the iOS-capable siblings against the V2 Pro, all from Razer's public CDN:
+
+| firmware | `apple` strings | `mfi` strings | gamepad axes |
+|---|---|---|---|
+| Kishi V2 Pro (BiancaFw/T1, 2.2) | **0** | **0** | 8-bit (0-255) |
+| Kishi V2 (BiancaFw/T2_PID_1819, 2.0) | 1 | 1 (`com.apple.mfi.launch_notify_previous`) | 16-bit signed |
+| Kishi Ultra (DeniseV2/T1, 2.0) | 1 | 1 (`com.apple.mfi.launch_notify_previous`) | 16-bit signed + digitizer |
+
+- The iOS-capable models carry an **MFi / iAP2 (Made for iPhone) accessory element**. The V2 Pro firmware contains **no Apple/MFi/iAP code at all**.
+- Wired USB-C controllers on iPhone are effectively MFi-gated. This matches the observed behavior: the V2 Pro is rejected by iPhone in both its HID and XInput modes.
+- So the gap between "works on iPhone" and "doesn't" is **not a single patchable descriptor** - it is a whole MFi/iAP2 implementation the V2 Pro lacks, plus a different (standard 16-bit) HID descriptor.
+
+### Why this very likely blocks the firmware route
+MFi/iAP2 authentication normally needs an **Apple MFi authentication coprocessor** (a physical IC). If Razer left that IC off the Android-only V2 Pro - plausible, and consistent with the firmware having zero MFi code - then no firmware change can make the V2 Pro an iOS wired controller, because the hardware to pass Apple's auth is absent. Razer's "a future firmware update will add iPhone support" implies the hardware is capable, but user reports say the shipped update did nothing.
+
+### The one remaining check
+Whether the V2 Pro PCB physically carries the Apple MFi auth coprocessor can only be answered by a **teardown**.
+- If absent -> the iPhone firmware path is **not feasible**; keep the V2 Pro for Android and use a natively iOS-supported controller (Kishi V2 / Ultra / V3 Pro) on iPhone.
+- If present -> a firmware port of the MFi + standard-HID path from a sibling is theoretically possible, but a large port (not a patch), with brick risk, still gated on identifying the MCU.
