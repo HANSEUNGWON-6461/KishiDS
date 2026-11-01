@@ -287,3 +287,19 @@
 **확정 사실 vs 미확인**
 - 확정: 식별/PID, 부트로더 식별자, 매니페스트/CDN, 펌웨어 형식, CRC 전용 검증, DFU 명령 집합, 메모리 맵, V1과 다른 MCU.
 - 미확인: MCU 품번, 기기 부트로더의 서명 검사 여부, 네이티브 DFU 와이어 포맷, 순정 펌웨어 내부.
+
+## 18. Phase 3 조사 2차: DFU 프로토콜 역공학 (2026-11-01)
+
+Nexus 앱의 Java와 네이티브 `libRazer_IoT_SDK.so`를 분석해 DFU 프로토콜 구조를 확정했다. 상세는 `firmware-research/v2pro/NEXUS_DFU_ANALYSIS.md` 부록 참고.
+
+**확정**
+- 명령 헤더(8바이트): `[0,0,0,0,0, size, class, id]` + 페이로드.
+- DFU 명령(class 0x10): Erase(id 0x01)=시작·끝 주소, Program(0x02)=주소+데이터, Verify(0x83)=device가 CRC16 계산해 반환, Exit(0x05), Abort(0x04), DeviceInfo(0x80).
+- 흐름: DeviceInfo → Erase → Program(청크) → Verify(CRC16 비교) → Exit. 각 명령은 인자를 되돌려주고 앱이 검증한다.
+- **검증은 CRC16뿐, 기기·클라이언트 어디에도 암호 서명 없음**(네이티브 문자열로 재확인: "ask firmware to calculate the CRC16", FwCheckSum vs SwCheckSum).
+- Kishi용 업데이터는 `BiancaFlashFirmwareUpdater`/`FlashFirmwareHexUpdater`. (`ry72xx`는 Razer 이어버드용이라 무관.)
+- 전송은 앱이 직접 controlTransfer 하지 않고, 네이티브 SDK가 담당한다. 앱은 `Razer_USB_SDK.setNativeUsbInterfaceID/EndpointType/Mode/Value`로 USB 경로만 설정하고, 네이티브가 HID 리포트로 전송한다. V2 Pro의 벤더 인터페이스 3/4(64바이트 OUT)가 운반 후보다.
+
+**아직 필요한 것**
+- 정확한 USB 포장(인터페이스/엔드포인트, SET_REPORT vs 인터럽트 OUT, 리포트 ID, 패킷 크기). 네이티브 심볼이 제거돼 정적 분석으로는 못 뽑았다. 가장 안전·확실한 방법은 **실제 업데이트의 USB 캡처**다.
+- MCU 품번(커스텀 이미지 작성에 필수). 네이티브 라이브러리에도 Kishi 칩명은 없다 → 실물 분해 필요.

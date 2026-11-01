@@ -79,3 +79,38 @@ Established (from the app + the public firmware image): identity/PIDs, bootloade
 integrity, the DFU command set, the memory map, and that the MCU differs from V1.
 
 Unknown: the MCU part number; whether the device bootloader checks a signature; the native DFU wire framing; the stock firmware's internals.
+
+## Appendix: DFU command set and transport (decompiled 2026-11-01)
+
+Extracted from the Nexus app's Java (`CommandHeader`, `BaseCommandHeader`) and the native `libRazer_IoT_SDK.so` (string/symbol analysis; `.text` local symbols are stripped, so exact native byte-packing was not recovered).
+
+### Command header serialization (`BaseCommandHeader.getHeader()`)
+8-byte header, then the command payload:
+```
+[0] 0x00  [1] 0x00  [2] 0x00  [3] 0x00  [4] 0x00  [5] size  [6] commandClass  [7] commandId
+```
+
+### DFU commands (commandClass = 0x10)
+| Command | size | id | payload | direction |
+|---|---|---|---|---|
+| GetDeviceInformation | 0x09 | 0x80 | — | get |
+| SetErase | 0x08 | 0x01 | StartAddress(LE32) + EndAddress(LE32) | set |
+| SetProgram | 0x08 | 0x02 | StartAddress(LE32) + binary data | set |
+| GetVerify | 0x05 | 0x83 | StartAddress(+length) → device returns CRC16 | get |
+| SetAbort | 0x00 | 0x04 | — | set |
+| SetExit | 0x00 | 0x05 | — | set |
+
+(ids with the high bit set, 0x80/0x83, are the read/"get" commands; low ids are "set". From the `CommandHeader.Dfu` subclasses.)
+
+### Protocol semantics (from native log/error strings)
+- Flow: GetDeviceInformation → SetErase(region) → SetProgram(chunks) → GetVerify(CRC16) → SetExit. SetAbort on error.
+- Each command echoes its arguments back; the app checks them ("DFUErase: startAddressRet != StartAddress || endAddressRet != EndAddress", "DFUProgram: ... strBinDataRet != strBinData", "DFUVerify: strVerifyBinData != strBinData").
+- Verify = the device computes **CRC16** over the flashed region ("ask firmware to calculate the CRC16", `FlashRegionCRC16`, `FwCheckSum != SwCheckSum`) and the app compares. **No cryptographic signature on device or client** — integrity only.
+- The native updater for the Kishi is `BiancaFlashFirmwareUpdater` / `FlashFirmwareHexUpdater` (parses Intel HEX), alongside generic `DfuFirmwareUpdater`. (`vendor/ry72xx/Ry72xxFirmwareUpdater` is for Razer **earbuds**, not the Kishi.)
+
+### Transport
+The app does **not** issue raw `controlTransfer` for DFU. It hands the firmware to the native SDK (`RazerUsbDeviceManager.updateDFUFirmwareVersion` → native `Razer_CMD_SDK` / `sendCmdPayload`), after configuring the USB path through `Razer_USB_SDK.setNativeUsbInterfaceID / setNativeUsbEndpointType / setNativeUsbMode / setNativeUsbValue`. The native SDK wraps the header+payload into HID reports (`SetSendHIDControl` / `SetSendHIDDeviceControl`) and performs the USB I/O. The V2 Pro's vendor interfaces 3/4 (64-byte interrupt OUT, from the HID descriptor dump) are the likely carrier.
+
+### What is still needed to build a working flasher
+- The **exact USB wrapping**: which interface/endpoint, SET_REPORT vs interrupt-OUT, report ID, and chunk/packet size. These live in the stripped native SDK. The reliable + safe way to capture them is a **USB bus capture of a real Nexus firmware operation** (even just GetDeviceInformation/GetVerify), not further static disassembly.
+- The MCU part number (for writing any custom image) — still unidentified; needs a physical teardown. `libRazer_IoT_SDK.so` did not name the Kishi MCU.
