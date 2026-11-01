@@ -136,3 +136,22 @@ MFi/iAP2 authentication normally needs an **Apple MFi authentication coprocessor
 Whether the V2 Pro PCB physically carries the Apple MFi auth coprocessor can only be answered by a **teardown**.
 - If absent -> the iPhone firmware path is **not feasible**; keep the V2 Pro for Android and use a natively iOS-supported controller (Kishi V2 / Ultra / V3 Pro) on iPhone.
 - If present -> a firmware port of the MFi + standard-HID path from a sibling is theoretically possible, but a large port (not a patch), with brick risk, still gated on identifying the MCU.
+
+## Binary-patch route: first-look assessment (2026-11-01)
+
+Disassembled the stock T1 (V2 Pro 2.2) image to judge whether a DS4 binary patch is approachable.
+
+- Vectors at flash 0x8000: SP=0x04008000, reset=0x8215, hardfault=0xB819 (ARM Cortex-M, thumb).
+- USB descriptors are static tables in flash: config descriptor @0x0001E88D (wTotalLength 149, 5 interfaces), HID gamepad report descriptor @0x0001E960. → the descriptor bytes are patchable; with no signature (CRC16 only) a re-CRC'd image flashes.
+
+Feasibility split:
+- Patchable (data): device/config/HID-report descriptors (VID/PID, interface layout, report format declaration).
+- Hard (code, undocumented binary): making the device BEHAVE as a DS4 — build the 64-byte DS4 input report, answer the DS4 feature reports iOS queries after enumeration, and collapse the 5-interface composite to a clean DS4. This is new code injected into a stripped, symbol-less FL7102 firmware for a chip with no public datasheet/SDK.
+
+### The full gate map (all must pass)
+1. Build a flasher for the FL7102 custom DFU — needs the exact USB wrapping (endpoint/report-id/packet size), which is in the native SDK → requires a USB capture of a real Nexus update (hard: the Kishi plugs into the phone, so capture needs root/usbmon or a hardware sniffer).
+2. Validate flasher + recovery by reflashing the identical stock image (brick risk begins; recovery via Nexus "Recovery" 1532:110E is likely but not guaranteed).
+3. RE the undocumented firmware to inject DS4 behaviour (descriptor patch is easy; DS4 report + feature-report handshake + composite cleanup is deep binary surgery, low odds, long).
+4. Get iOS to actually accept the emulated DS4 (the post-enumeration feature-report requirements are unverified).
+
+Each gate is hard; the first (a USB capture to build the flasher) already blocks all on-device work. Honest expectation: low overall odds, long effort. Documented so the attempt, if made, starts from the known facts.
